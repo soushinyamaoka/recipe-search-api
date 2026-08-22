@@ -10,7 +10,7 @@
 cd recipe-search-api/
 pip install -r requirements.txt
 python app.py
-# → http://localhost:8000 で起動
+# → http://localhost:8002 で起動
 ```
 
 > Expo Goからアクセスする場合は `localhost` ではなくPCのローカルIP（例: `192.168.x.x`）を使用してください。
@@ -145,7 +145,7 @@ interface WebRecipeErrorResponse {
 
 ```typescript
 const API_BASE_URL =
-  process.env.EXPO_PUBLIC_RECIPE_API_URL || "http://localhost:8000";
+  process.env.EXPO_PUBLIC_RECIPE_API_URL || "http://localhost:8002";
 
 /**
  * Webレシピ検索（POST /api/recipes/search）
@@ -221,5 +221,5 @@ try {
 ## 補足
 
 - **レスポンス速度**: 全10サイト並行検索で3〜8秒程度
-- **Swagger UI**: `http://localhost:8000/docs` で全エンドポイントを試せます
+- **Swagger UI**: `http://localhost:8002/docs` で全エンドポイントを試せます
 - **対応サイト**: 楽天レシピ, 白ごはん.com, dancyu, クックパッド, Nadia, クラシル, DELISH KITCHEN, みんなのきょうの料理, レタスクラブ, 味の素パーク
