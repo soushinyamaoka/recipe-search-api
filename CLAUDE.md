@@ -58,6 +58,13 @@ recipe-search-api/
 
 > 詳細は server-config.md を参照（.gitignore対象・リポジトリ非公開）
 
+> ## ⚠ VPS安全化後の現行 production contract
+> - **bind**: `127.0.0.1:8002`（`0.0.0.0`で公開しない）。外部公開ポートは **22/80/443 のみ**。外部からは HTTPS入口 `https://recipe-search.homehub-tools.dedyn.io` 経由（`:8002` へは直接到達不可）。
+> - **runtime user/group**: `recipe-search`（systemd runtime を deploy ユーザーへ戻さない）。
+> - **`/opt/apps/deploy.sh`** は legacy route（新 canonical framework ではない）。
+> - **⛔ source deploy は現在 BLOCKED**: ローカル source と VPS source に既知の差異があり、**canonical source 確定前の source deploy は行わない。ローカル版で VPS を上書きしない。**
+> - 旧 `/home/ubuntu` パス・旧手順は現行構成で要確認（推測で変更しない）。
+
 ## APIエンドポイント
 
 | メソッド | パス | 説明 |
