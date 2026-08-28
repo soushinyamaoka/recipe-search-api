@@ -2,3 +2,6 @@ __pycache__/
 
 # サーバー構成情報（IPアドレス・SSH情報を含む）
 server-config.md
+
+# ChatGPT Work / AIファイル受け渡し
+/work/ai_handoff/
