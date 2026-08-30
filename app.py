@@ -23,17 +23,138 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
+from contextlib import asynccontextmanager
+from datetime import datetime
 import asyncio
 import httpx
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus, urlencode, urljoin
 import re
 import json
+import logging
+
+
+APP_LOG_NAME = "recipe-search"
+_SAFE_LOG_FIELDS = {
+    "msg",
+    "duration_ms",
+    "error_kind",
+    "target",
+    "status",
+    "job",
+    "run_id",
+    "error_class",
+}
+
+
+def _structured_level(level_number: int) -> str:
+    """Pythonのログレベルを共通ログ規約の5値へ変換する。"""
+    if level_number >= logging.CRITICAL:
+        return "critical"
+    if level_number >= logging.ERROR:
+        return "error"
+    if level_number >= logging.WARNING:
+        return "warn"
+    if level_number >= logging.INFO:
+        return "info"
+    return "debug"
+
+
+class StructuredJsonFormatter(logging.Formatter):
+    """安全な明示フィールドだけをstderr向け1行JSONへ変換する。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        event = getattr(record, "event", None)
+        if not event:
+            event = "server_log" if record.name.startswith("uvicorn") else "library_log"
+
+        payload = {
+            "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+            "app": APP_LOG_NAME,
+            "level": _structured_level(record.levelno),
+            "event": event,
+        }
+
+        fields = getattr(record, "event_fields", {})
+        if isinstance(fields, dict):
+            for key, value in fields.items():
+                if key in _SAFE_LOG_FIELDS:
+                    payload[key] = value
+
+        if record.exc_info and record.exc_info[0]:
+            payload.setdefault("error_class", record.exc_info[0].__name__)
+
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def configure_logging() -> None:
+    """アプリとuvicornのログをstderrの単一JSONハンドラへ統一する。"""
+    handler = logging.StreamHandler()
+    handler.setFormatter(StructuredJsonFormatter())
+
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.addHandler(handler)
+    root_logger.setLevel(logging.INFO)
+
+    for name in ("uvicorn", "uvicorn.error"):
+        uvicorn_logger = logging.getLogger(name)
+        uvicorn_logger.handlers.clear()
+        uvicorn_logger.propagate = True
+        uvicorn_logger.disabled = False
+
+    # query文字列付きURLを含み得るアクセスログは出力しない。
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.handlers.clear()
+    access_logger.propagate = False
+    access_logger.disabled = True
+
+    # httpx/httpcoreのINFOログにはリクエストURLが含まれるため抑止する。
+    for name in ("httpx", "httpcore"):
+        library_logger = logging.getLogger(name)
+        library_logger.handlers.clear()
+        library_logger.propagate = True
+        library_logger.setLevel(logging.WARNING)
+
+
+def log_event(level: int, event: str, **fields) -> None:
+    """固定イベント名と明示した安全なフィールドだけを記録する。"""
+    logger.log(level, event, extra={"event": event, "event_fields": fields})
+
+
+def log_external_call_failed(target: str, error: Exception) -> None:
+    """外部サイトの部分失敗を、URLや例外メッセージを含めず記録する。"""
+    error_kind = (
+        "timeout"
+        if isinstance(error, (httpx.TimeoutException, TimeoutError))
+        else "external_api"
+    )
+    log_event(
+        logging.WARNING,
+        "external_call_failed",
+        target=target,
+        error_kind=error_kind,
+        error_class=type(error).__name__,
+    )
+
+
+configure_logging()
+logger = logging.getLogger(APP_LOG_NAME)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    log_event(logging.INFO, "startup")
+    try:
+        yield
+    finally:
+        log_event(logging.INFO, "shutdown")
 
 app = FastAPI(
     title="レシピ検索API",
     description="日本の主要レシピサイト10サイトからレシピを横断検索するAPI",
     version="2.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -404,7 +525,7 @@ async def search_rakuten(query: str, page: int = 1) -> list[Recipe]:
                 unique.append(r)
         recipes = unique[:50]
     except Exception as e:
-        print(f"[楽天レシピ] エラー: {e}")
+        log_external_call_failed("rakuten_recipe", e)
     return recipes
 
 
@@ -456,7 +577,7 @@ async def search_sirogohan(query: str) -> list[Recipe]:
                 unique.append(r)
         recipes = unique
     except Exception as e:
-        print(f"[白ごはん.com] エラー: {e}")
+        log_external_call_failed("sirogohan", e)
     return recipes[:50]
 
 
@@ -511,7 +632,7 @@ async def search_dancyu(query: str) -> list[Recipe]:
                 unique.append(r)
         recipes = unique
     except Exception as e:
-        print(f"[dancyu] エラー: {e}")
+        log_external_call_failed("dancyu", e)
     return recipes[:50]
 
 
@@ -568,7 +689,7 @@ async def search_cookpad(query: str, page: int = 1) -> list[Recipe]:
                 unique.append(r)
         recipes = unique[:50]
     except Exception as e:
-        print(f"[クックパッド] エラー: {e}")
+        log_external_call_failed("cookpad", e)
     return recipes
 
 
@@ -696,7 +817,7 @@ async def search_nadia(query: str) -> list[Recipe]:
                 unique.append(r)
         recipes = unique[:50]
     except Exception as e:
-        print(f"[Nadia] エラー: {e}")
+        log_external_call_failed("nadia", e)
     return recipes
 
 
@@ -752,7 +873,7 @@ async def search_kurashiru(query: str) -> list[Recipe]:
                 unique.append(r)
         recipes = unique[:50]
     except Exception as e:
-        print(f"[クラシル] エラー: {e}")
+        log_external_call_failed("kurashiru", e)
     return recipes
 
 
@@ -804,7 +925,7 @@ async def search_delish_kitchen(query: str) -> list[Recipe]:
                 unique.append(r)
         recipes = unique[:50]
     except Exception as e:
-        print(f"[DELISH KITCHEN] エラー: {e}")
+        log_external_call_failed("delish_kitchen", e)
     return recipes
 
 
@@ -861,7 +982,7 @@ async def search_kyounoryouri(query: str) -> list[Recipe]:
                 unique.append(r)
         recipes = unique[:50]
     except Exception as e:
-        print(f"[みんなのきょうの料理] エラー: {e}")
+        log_external_call_failed("kyounoryouri", e)
     return recipes
 
 
@@ -917,7 +1038,7 @@ async def search_lettuceclub(query: str) -> list[Recipe]:
                 unique.append(r)
         recipes = unique[:50]
     except Exception as e:
-        print(f"[レタスクラブ] エラー: {e}")
+        log_external_call_failed("lettuceclub", e)
     return recipes
 
 
@@ -973,7 +1094,7 @@ async def search_ajinomoto(query: str) -> list[Recipe]:
                 unique.append(r)
         recipes = unique[:50]
     except Exception as e:
-        print(f"[味の素パーク] エラー: {e}")
+        log_external_call_failed("ajinomoto_park", e)
     return recipes
 
 
@@ -1225,6 +1346,13 @@ async def app_search_recipes(req: AppSearchRequest):
         )
 
     except Exception as e:
+        log_event(
+            logging.ERROR,
+            "search_failed",
+            target="api_recipes_search",
+            error_kind="internal",
+            error_class=type(e).__name__,
+        )
         return JSONResponse(
             status_code=500,
             content={"error": f"レシピ検索中にエラーが発生しました: {str(e)}"},
@@ -1368,8 +1496,10 @@ async def list_sources():
 
 if __name__ == "__main__":
     import uvicorn
-    print("レシピ検索API v2.1 起動中...")
-    print(f"   対応サイト: {len(SCRAPERS)}サイト")
-    print("   アプリ連携: POST /api/recipes/search")
-    print("   ドキュメント: http://localhost:8002/docs")
-    uvicorn.run(app, host="0.0.0.0", port=8002)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8002,
+        log_config=None,
+        access_log=False,
+    )
