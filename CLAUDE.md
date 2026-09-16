@@ -62,7 +62,7 @@ recipe-search-api/
 > - **bind**: `127.0.0.1:8002`（`0.0.0.0`で公開しない）。外部公開ポートは **22/80/443 のみ**。外部からは HTTPS入口 `https://recipe-search.homehub-tools.dedyn.io` 経由（`:8002` へは直接到達不可）。
 > - **runtime user/group**: `recipe-search`（systemd runtime を deploy ユーザーへ戻さない）。
 > - **`/opt/apps/deploy.sh`** は legacy route（新 canonical framework ではない）。
-> - **⛔ source deploy は現在 BLOCKED**: ローカル source と VPS source に既知の差異があり、**canonical source 確定前の source deploy は行わない。ローカル版で VPS を上書きしない。**
+> - **source deploy**: 2026-08-30、read-only照合によりcanonical sourceは**ローカルGit**と確定済み（VPS管理側 `OPS-P1-02` 解消）。差分はローカルのみに存在する`simple_mode`機能のみで、VPS側にしか存在しない内容はゼロと判明し、同日にdeploy・反映済み（production baseline: commit `5602a24`以降）。**ただしcanonical確定はdeploy承認そのものではない**。次回deploy時も通常のdeploy前チェック（server change notice作成等）は必要。
 > - 旧 `/home/ubuntu` パス・旧手順は現行構成で要確認（推測で変更しない）。
 
 ## APIエンドポイント
