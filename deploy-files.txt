@@ -5,4 +5,5 @@
 # ===========================================
 
 app.py
+canary_check.py
 requirements.txt
