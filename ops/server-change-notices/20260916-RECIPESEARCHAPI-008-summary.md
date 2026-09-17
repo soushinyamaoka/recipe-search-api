@@ -12,15 +12,15 @@ app: recipe-search
 
 source_branch: main
 
-source_commit: 未確定（859712fe9a050363cf226fbd1cf86cc76096daf3 を基点とする未コミット変更）
+source_commit: cf248c4534576f35c685caed604ee05700142e0e
 
 production_baseline_commit: 5602a243759b9542b94e5607d33c819e4ec6c3a0
 
-release_commits: 859712fe9a050363cf226fbd1cf86cc76096daf3、および task 20260916-008 の未コミット差分
+release_commits: production baseline `5602a24` から deploy対象source `cf248c4` までは次の2commit。`859712fe9a050363cf226fbd1cf86cc76096daf3`（旧notice `20260830-RECIPESEARCHAPI-001` の文書更新のみ。runtime code変更なし）、`cf248c4534576f35c685caed604ee05700142e0e`（本変更の実装。`canary_check.py` 追加・`deploy-files.txt` 追記・本notice追加）。source以降の文書commitとして `ded621ba653e43e95963d651c57fd1831b957346`（`CLAUDE.md` の canonical-source blocker 旧表記の修正のみ）があり、これはdeploy対象sourceに含まれない。
 
 impact_level: L2
 
-status: draft
+status: ready_for_review
 
 created_by: Codex
 
@@ -64,10 +64,11 @@ server_impact: notify
 
 ## production変更
 
-- 必要性: あり（将来 `canary_check.py` をVPSへ配置する場合）。本taskでは実施しない。
-- 想定作業: source deployは現在BLOCKEDのため未確定。canonical source確定後、VPS管理側で配置範囲と手順を決定する。
-- downtime: 未確定。ファイル配置自体はservice再起動を必要としない設計だが、実際のdeploy手順はVPS管理側で確認する。
-- maintenance window: 現時点では不要。手順確定時に再判定する。
+- 必要性: あり（`canary_check.py` をVPSへ配置する場合）。本taskでは実施しない。
+- canonical source: **2026-08-30に解消済み**。read-only照合によりcanonical sourceはローカルGitと確定し（VPS管理側 `OPS-P1-02`）、当時の唯一の差分（`simple_mode`）も同日production反映済みである。本noticeのdeploy対象source `cf248c4` から production baseline `5602a24` までの範囲で、`app.py` と `requirements.txt` に差分はない（既存API runtime codeと依存は変更されない）。したがって「canonical source未確定によるsource deploy blocker」は本変更の前提条件としては存在しない。
+- 想定作業: 下記「Deploy・rollback」に2経路を記載する。**どちらの経路もproduction個別承認が必要**であり、本noticeの`accepted`はproduction承認ではない。
+- downtime: 推奨経路（単一file配置）では発生しない。既存legacy wrapper経路を選ぶ場合はbrief restartが発生する。詳細は「Deploy・rollback」を参照。
+- maintenance window: 推奨経路では不要。legacy wrapper経路を選ぶ場合は再判定する。
 
 ## 利用者への影響
 
@@ -91,16 +92,36 @@ server_impact: notify
 
 ## Deploy・rollback
 
-- deploy前提: source deploy blockerの解消、source commitの確定、VPS管理review、production個別承認。
-- deploy手順の変更: `deploy-files.txt` の対象へ `canary_check.py` が増える。実手順はsource deploy blocker解消後にVPS管理側で決定する。
-- rollback方法: 配置した `canary_check.py` をdeploy artifactから除外する。service設定・data変更はない。
-- rollback不能条件: なし。
+- deploy前提: source commit `cf248c4` の確定とremote push（本notice最終化で実施）、VPS管理review、production個別承認。
+
+### 既存legacy wrapper経路との差異（重要）
+
+初版noticeは「ファイル配置自体はservice再起動を必要としない」と記載していたが、**既存のshared Windows wrapperをそのまま使う場合、これは成り立たない**。
+
+`deploy-recipe-search.bat` → 共通 `deploy.bat` は、`deploy-files.txt` に記載された**全file**（本変更後は `app.py`・`canary_check.py`・`requirements.txt` の3file）を転送したうえで、VPS上の `/opt/apps/deploy.sh recipe-search` を呼ぶ。同scriptは `pip install` と `recipe-search.service` の再起動を必ず実施する。したがって既存wrapper経由では、無停止の単一file配置にはならない。
+
+### 推奨経路（単一file・無停止・service再起動なし）
+
+1. 固定source commit `cf248c4` と production baseline `5602a24` の間で、`app.py` と `requirements.txt` に差分がないことを再確認する。
+2. `canary_check.py` **のみ**を、退避とhash確認付きで一時pathへ転送し、同一filesystem上でatomicに配置する。
+3. source/venv、owner/group/mode、service状態、内部health・public healthを、配置の前後で確認する。
+4. serviceは**再起動しない**。import確認を行い、手動カナリアの1回実行は**承認範囲に含める場合のみ**実施する。
+5. rollback: 追加した `canary_check.py` を除去し、配置前の状態とhealthを確認する。既存fileを書き換えないため、rollback不能条件はない。
+
+### legacy wrapper経路を選ぶ場合
+
+brief restart、3file全転送、依存install、health確認、rollbackを含む**別の実施計画として再評価が必要**である。本noticeは推奨経路を前提に記載している。
+
+### 共通
+
+- どちらの経路も**production個別承認が必要**。
+- service設定・永続data・依存の変更はない。`canary_check.py` は追加されるだけで、自動実行はされない。
 
 ## Health・テスト
 
 - health contract変更: なし
-- 実施テスト: `.venv-codex` のPython 3.12.14で構文compile、`app` import、カナリアimportと10サイト登録確認、全10サイトを偽関数へ差し替えた失敗系・全成功系の主処理検証。
-- 結果: 全テスト成功。各サイト1回、0件=`zero`、例外=`error`、1件=`ok`を確認。失敗系は終了コード1・`job_end.status=failure`、全成功系は終了コード0・`job_end.status=success`。各ケース12行を全件JSON parseし、URL、query文字列、例外messageが含まれないことを確認。
+- 実施テスト: `.venv-codex` のPython 3.12.14で構文compile、`app` import、カナリアimportと10サイト登録確認、全10サイトを偽関数へ差し替えた失敗系・全成功系の主処理検証。**2026-09-17のnotice最終化時に同一手順で再実行し、同結果を確認済み**。
+- 結果: 全テスト成功。各サイト1回、0件=`zero`、例外=`error`、1件=`ok`を確認。失敗系は終了コード1・`job_end.status=failure`、全成功系は終了コード0・`job_end.status=success`。各ケース12行を全件JSON parseし、1実行内で`run_id`が一致すること、URL、query文字列、例外messageが含まれないことを確認。
 - 未実施テストと理由: 外部レシピサイトへの実接続は必須でなく負荷回避のため未実施。production接続・deployは未承認かつ禁止のため未実施。
 
 ## Log・監視
@@ -113,36 +134,37 @@ server_impact: notify
 
 正本: VPS管理repositoryの `docs/templates/server_change_notice_pre_submission_checklist.md`
 
-- [x] production baselineを正本で確認し、baselineから現在HEADまでのcommitを確認した
-- [ ] full source commitとremote push（未コミットであり、本taskにcommit・pushの明示指示がない）
-- [x] data、secret/auth、network、runtime、dependency、backup、client contractに変更がないことを確認した
+- [x] production baselineを正本で確認し、baselineからsource commitまでのcommit列を確認した（`859712f` → `cf248c4`。source以降の文書commit `ded621b` とは区別して記録した）
+- [x] full source commitの確定とremote push（source `cf248c4`、notice最終commitとともに `main` へpush済み。force push・履歴改変なし）
+- [x] data、secret/auth、network、runtime、dependency、backup、client contractに変更がないことを確認した（baseline..source で `app.py`・`requirements.txt` に差分なし）
 - [x] job/log変更のためfull templateとL2を選択した
 - [x] cron/timerは追加せず、カナリアが同一 `run_id` の `job_start` / `job_end` を出すことを確認した
 - [x] secret、個人情報、URL、query文字列、raw response/errorをログ・差分へ含めないことを確認した
 - [x] `deployment_status: not_started`を確認した
-- [ ] tracked working tree clean（本taskの未コミット変更があるため未達）
+- [x] tracked working tree clean
 
-未確認・該当なしの理由: production artifact、deploy前後health、rollback実行手順はsource deploy blocker解消後にVPS管理側で確定する。DB/data、client配信は変更なしのため該当しない。
+未確認・該当なしの理由: production artifact、deploy前後health、rollback実行手順は、上記「Deploy・rollback」の推奨経路を前提にproduction個別承認時へ確定する。DB/data、client配信は変更なしのため該当しない。
 
 ## 未解決事項
 
-- source commitの確定とremote push。
-- source deploy blockerの解消、およびproduction配置手順のVPS管理review・個別承認。
+- production配置経路の選択（推奨経路 / legacy wrapper経路）と、production個別承認。
 - cron/timerによる定期実行、監視条件、timeout・retry方針は本変更に含めず、別taskとして設計・承認する。
+- 自動化前に、固定keywordで全10サイト1件以上を必須とする判定が恒常的failureにならないか、制御された初回実行でsite別baselineを取得して閾値を確定する必要がある（VPS管理レビュー §5 の継続事項）。
+- `run_id` は実行時刻（`%Y%m%dT%H%M%S%f%z`）由来のため、同一clock tick内に複数回実行すると同じ値になり得る。定期実行の間隔では実用上問題にならないが、未実行検知・突合の設計時に留意する。
 
 ## 希望時期
 
-source deploy blocker解消後。production反映時期はVPS管理側reviewと個別承認で決定する。
+VPS管理側の再レビューで`accepted`となった後、production個別承認を得た時点。時期はVPS管理側で決定する。
 
 ## VPS管理チャットへの引き継ぎ
 
 - 引き継ぎ要否: 必要
-- ユーザーへの案内: この無人実行経路では未実施
+- ユーザーへの案内: 実施済み（2026-09-16）
 - VPS管理チャットへ渡すpath: `ops/server-change-notices/20260916-RECIPESEARCHAPI-008-summary.md`
 
 ## Approval
 
-- app owner: task 20260916-008 のローカル実装を承認済み
-- VPS management review: 未実施
-- production approval: なし
+- app owner: task 20260916-008 のローカル実装を承認済み。notice最終化（source commit固定・remote push・`B01`/`B02`反映）も2026-09-17に承認済み
+- VPS management review: 2026-09-17に1回目実施、`blocked` 判定（`RECIPESEARCH-008-B01` / `B02`）。本版で両blockerへ対応し再レビューを依頼する。review正本: VPS管理repositoryの `docs/operations/recipe_search_canary_review_20260917.md`
+- production approval: なし（production task未割当、production未反映）
 - related task_id: 20260916-008
